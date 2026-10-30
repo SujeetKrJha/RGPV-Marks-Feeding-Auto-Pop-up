@@ -1,0 +1,143 @@
+// ==UserScript==
+// @name         RGPV Marks Auto Fill Test
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Upload Excel file with multiple sheets and auto-fill marks based on selected sheet
+// @match        file://*/*
+// @match        https://*.rgpv.ac.in/*
+// @require      https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let globalWorkbook = null;
+
+    function init() {
+        // Create Floating Control Panel UI
+        const container = document.createElement('div');
+        container.style.cssText = 'position:fixed; top:20px; right:20px; z-index:9999; background:#ffffff; border:2px solid #28a745; padding:15px; border-radius:8px; box-shadow:0 4px 10px rgba(0,0,0,0.15); font-family:Arial, sans-serif; min-width:220px;';
+
+        container.innerHTML = `
+            <div style="font-weight:bold; margin-bottom:10px; color:#333;">Marks Auto-Fill Panel</div>
+            <input type="file" id="excelFileInput" accept=".xlsx, .xls" style="display:none;" />
+            <button id="uploadExcelBtn" style="background:#007bff; color:white; font-weight:bold; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; width:100%; margin-bottom:10px;">📁 Upload Excel</button>
+
+            <div id="sheetDropdownContainer" style="display:none;">
+                <label style="font-size:12px; font-weight:bold; display:block; margin-bottom:4px;">Select Sheet / Subject:</label>
+                <select id="sheetSelect" style="width:100%; padding:6px; margin-bottom:10px; border-radius:4px; border:1px solid #ccc;"></select>
+                <button id="fillMarksBtn" style="background:#28a745; color:white; font-weight:bold; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; width:100%;">⚡ Fill Marks</button>
+            </div>
+            <div id="statusLabel" style="font-size:12px; color:#666; margin-top:8px;"></div>
+        `;
+
+        document.body.appendChild(container);
+
+        const fileInput = document.getElementById('excelFileInput');
+        const uploadBtn = document.getElementById('uploadExcelBtn');
+        const dropdownContainer = document.getElementById('sheetDropdownContainer');
+        const sheetSelect = document.getElementById('sheetSelect');
+        const fillBtn = document.getElementById('fillMarksBtn');
+        const statusLabel = document.getElementById('statusLabel');
+
+        // Trigger file input dialog
+        uploadBtn.onclick = () => fileInput.click();
+
+        // Handle File Selection
+        fileInput.onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                try {
+                    const data = new Uint8Array(evt.target.result);
+                    globalWorkbook = XLSX.read(data, { type: 'array' });
+
+                    // Populate Sheet Names in Dropdown
+                    sheetSelect.innerHTML = '';
+                    globalWorkbook.SheetNames.forEach(sheetName => {
+                        const option = document.createElement('option');
+                        option.value = sheetName;
+                        option.textContent = sheetName;
+                        sheetSelect.appendChild(option);
+                    });
+
+                    dropdownContainer.style.display = 'block';
+                    statusLabel.innerText = `Loaded ${globalWorkbook.SheetNames.length} sheet(s).`;
+                    statusLabel.style.color = '#28a745';
+                } catch (err) {
+                    statusLabel.innerText = 'Error reading Excel file.';
+                    statusLabel.style.color = '#dc3545';
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        };
+
+        // Handle Fill Marks Click
+        fillBtn.onclick = function() {
+            if (!globalWorkbook) {
+                alert('Please upload an Excel file first.');
+                return;
+            }
+
+            const selectedSheet = sheetSelect.value;
+            const worksheet = globalWorkbook.Sheets[selectedSheet];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+            if (jsonData.length < 2) {
+                alert('The selected sheet is empty or missing headers.');
+                return;
+            }
+
+            // Identify column indices for Enrollment Number and Marks
+            const headers = jsonData[0].map(h => String(h).trim().toLowerCase());
+            const enrollIdx = headers.findIndex(h => h.includes('enrollment') || h.includes('roll') || h.includes('id'));
+            const marksIdx = headers.findIndex(h => h.includes('mark') || h.includes('score'));
+
+            if (enrollIdx === -1 || marksIdx === -1) {
+                alert('Could not locate "Enrollment" and "Marks" headers in sheet: ' + selectedSheet);
+                return;
+            }
+
+            // Build dictionary mapping Enrollment No -> Mark
+            const marksMap = {};
+            for (let i = 1; i < jsonData.length; i++) {
+                const row = jsonData[i];
+                if (row[enrollIdx]) {
+                    const enrollNo = String(row[enrollIdx]).trim().toUpperCase();
+                    const markVal = row[marksIdx] !== undefined ? String(row[marksIdx]).trim() : '';
+                    marksMap[enrollNo] = markVal;
+                }
+            }
+
+            // Locate and populate input fields in the table
+            const rows = document.querySelectorAll('table tr');
+            let filledCount = 0;
+
+            rows.forEach(row => {
+                const rowText = row.innerText.toUpperCase();
+                Object.keys(marksMap).forEach(enrollmentNo => {
+                    if (rowText.includes(enrollmentNo)) {
+                        const inputField = row.querySelector('input[type="text"], input[type="number"]');
+                        if (inputField) {
+                            inputField.value = marksMap[enrollmentNo];
+                            inputField.dispatchEvent(new Event('input', { bubbles: true }));
+                            inputField.dispatchEvent(new Event('change', { bubbles: true }));
+                            filledCount++;
+                        }
+                    }
+                });
+            });
+
+            alert(`Successfully filled ${filledCount} marks fields from sheet "${selectedSheet}"!`);
+        };
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
